@@ -12,6 +12,16 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   internal var _lastTimebasedPlayerState: ReadiumTimebasedState?
   internal var _nowPlayingUpdater: NowPlayingInfoUpdater
   @MainActor internal var _audioNavigator: AudioNavigator?
+  
+  /// True when playback is expected to continue from the app/user perspective.
+  private var _playbackShouldContinue = false
+  /// True while `_audioNavigator` is performing an operation that can cause a transient
+  /// native pause, such as seek, skip, locator navigation, or resource transition.
+  private var _transientPlaybackOperation = false
+  /// Delayed cleanup task for the transient-operation guard.
+  private var _transientPlaybackOperationClearTask: Task<Void, Never>?
+  /// Token used to invalidate stale delayed cleanup tasks.
+  private var _transientPlaybackOperationToken = 0
 
   internal var subscriptions: Set<AnyCancellable> = []
 
@@ -81,6 +91,9 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   }
 
   public func dispose() -> Void {
+    self._playbackShouldContinue = false
+    endTransientPlaybackOperation()
+    
     if (self._audioNavigator != nil) {
       self._audioNavigator?.pause()
       self._audioNavigator?.delegate = nil
@@ -93,8 +106,14 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   }
 
   public func play(fromLocator: Locator?) async -> Void {
+    _playbackShouldContinue = true
+
     if let locator = resolveLocator(fromLocator) {
+      beginTransientPlaybackOperation()
       let _ = await seek(toLocator: locator)
+    } else if _audioNavigator?.currentLocation == nil {
+      // Initial play may internally call go(to:), which pauses.
+      beginTransientPlaybackOperation()
     }
     _audioNavigator?.play()
     _nowPlayingUpdater.setupNowPlayingInfo()
@@ -106,10 +125,19 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   }
 
   public func pause() async -> Void {
+    _playbackShouldContinue = false
+    endTransientPlaybackOperation()
+    
     _audioNavigator?.pause()
   }
 
   public func resume() async -> Void {
+    _playbackShouldContinue = true
+    if _audioNavigator?.currentLocation == nil {
+      // Initial play may internally call go(to:), which pauses.
+      beginTransientPlaybackOperation()
+    }
+    
     _audioNavigator?.play()
   }
 
@@ -134,10 +162,14 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
       Log.navigator.warn("Could not resolve Locator: \(toLocator)")
       return false
     }
+    beginTransientPlaybackOperation()
     let wasPlaying = _audioNavigator?.state == .playing || _audioNavigator?.state == .loading
     let navigated = await _audioNavigator?.go(to: resolvedLocator) ?? false
     if (wasPlaying && navigated) {
       _audioNavigator?.play()
+    }
+    if !navigated {
+      endTransientPlaybackOperation()
     }
     return navigated
   }
@@ -161,6 +193,7 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   }
 
   public func seek(toOffset: Double) async -> Bool {
+    beginTransientPlaybackOperation()
     let wasPlaying = _audioNavigator?.state == .playing || _audioNavigator?.state == .loading
     await _audioNavigator?.seek(to: toOffset)
     if (wasPlaying) {
@@ -171,6 +204,7 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
 
   public func seekRelative(byOffsetSeconds: Double) async -> Bool {
     if !_preferences.continuousSeeking {
+      beginTransientPlaybackOperation()
       await _audioNavigator?.seek(by: byOffsetSeconds)
       return true
     }
@@ -305,6 +339,18 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
 
   /// Called when the playback updates.
   public func navigator(_ navigator: AudioNavigator, playbackDidChange info: MediaPlaybackInfo) {
+    switch info.state {
+      case .playing:
+        _playbackShouldContinue = true
+        endTransientPlaybackOperation()
+      case .paused:
+        if !_playbackShouldContinue {
+          endTransientPlaybackOperation()
+        }
+      case .loading:
+        break
+    }
+    
     self._nowPlayingUpdater.updatePlaybackFromInfo(info, withSpeedSetting: _audioNavigator?.settings.speed)
     self._nowPlayingUpdater.updateCommandCenterControls()
     self.playback = info
@@ -336,6 +382,10 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
   /// Called when the navigator finished playing the current resource.
   /// Returns whether the next resource should be played. Default is true.
   public func navigator(_ navigator: AudioNavigator, shouldPlayNextResource info: MediaPlaybackInfo) -> Bool {
+    let hasNextResource = info.resourceIndex + 1 < publication.readingOrder.count
+    if hasNextResource && _playbackShouldContinue {
+      beginTransientPlaybackOperation()
+    }
     return true
   }
 
@@ -376,7 +426,12 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
     if _audioNavigator?.canGoForward != true {
       return false
     }
-    return await _audioNavigator?.goForward() ?? false
+    beginTransientPlaybackOperation()
+    let didSkip = await _audioNavigator?.goForward() ?? false
+    if !didSkip {
+      endTransientPlaybackOperation()
+    }
+    return didSkip
   }
 
   @MainActor
@@ -384,7 +439,12 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
     if _audioNavigator?.canGoBackward != true {
       return false
     }
-    return await _audioNavigator?.goBackward() ?? false
+    beginTransientPlaybackOperation()
+    let didSkip = await _audioNavigator?.goBackward() ?? false
+    if !didSkip {
+      endTransientPlaybackOperation()
+    }
+    return didSkip
   }
 
   @MainActor
@@ -407,6 +467,11 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
 
     /// Create TimebasedState and send it over the timebased-state stream.
     let timebasedState = mapToTimebasedState(info: info, location: location, bufferedInterval: bufferedInterval)
+    
+    if timebasedState.state == .ended {
+      _playbackShouldContinue = false
+      endTransientPlaybackOperation()
+    }
 
     // If state has changed, submit it to listener.
     if (timebasedState != self._lastTimebasedPlayerState) {
@@ -457,6 +522,9 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
       playerState = .ended
       /// FIX: totalProgression will be very close to 1.0, but not always exactly there, so we have to force it.
       locator?.locations.totalProgression = 1.0
+    } else if (info.state == .paused && _transientPlaybackOperation && _playbackShouldContinue) {
+      Log.navigator.debug("Mapping transient AudioNavigator pause to loading")
+      playerState = .loading
     }
 
     /// Create TimebasedState and send it over the timebased-state stream.
@@ -468,5 +536,56 @@ public class FlutterAudioNavigator: FlutterTimebasedNavigator, AudioNavigatorDel
       currentLocator: locator
     )
     return timebasedState
+  }
+  
+  /// Starts a short-lived guard around playback operations that are expected to
+  /// continue playback but may temporarily pause the native player internally.
+  ///
+  /// If playback is currently intended to continue, this method marks the operation
+  /// as transient. The guard is cleared automatically after a timeout to avoid getting
+  /// stuck if the native player never reports a stable state.
+  private func beginTransientPlaybackOperation() {
+    let nativeState = _audioNavigator?.state
+    let shouldMaskPause =
+      _playbackShouldContinue ||
+      nativeState == .playing ||
+      nativeState == .loading ||
+      playback.state == .playing ||
+      playback.state == .loading
+    
+    guard shouldMaskPause else {
+      return
+    }
+    
+    _transientPlaybackOperation = true
+    _transientPlaybackOperationToken += 1
+    let token = _transientPlaybackOperationToken
+    
+    // Must be longer than the throttled playback stream, otherwise a delayed
+    // native `.paused` may leak after the guard is cleared.
+    let timeout = UInt64(max(2.0, _preferences.updateIntervalSecs * 4.0) * 1_000_000_000)
+    
+    _transientPlaybackOperationClearTask?.cancel()
+    _transientPlaybackOperationClearTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: timeout)
+      
+      // Prevent clearing the guard if a newer guard exists.
+      guard let self, self._transientPlaybackOperationToken == token else {
+        return
+      }
+      
+      self._transientPlaybackOperation = false
+    }
+  }
+  
+  /// Clears the transient-operation guard and cancels any pending timeout.
+  ///
+  /// Call this when playback reaches a stable semantic state, for example native
+  /// `.playing`, a real user/app pause, end-of-book, disposal, or failed navigation.
+  private func endTransientPlaybackOperation() {
+    _transientPlaybackOperation = false
+    _transientPlaybackOperationToken += 1
+    _transientPlaybackOperationClearTask?.cancel()
+    _transientPlaybackOperationClearTask = nil
   }
 }
