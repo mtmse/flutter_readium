@@ -1,4 +1,5 @@
 import ReadiumNavigator
+import Foundation
 
 /// Keeps track of playback intent while AudioNavigator performs operations that
 /// may temporarily pause the native player internally.
