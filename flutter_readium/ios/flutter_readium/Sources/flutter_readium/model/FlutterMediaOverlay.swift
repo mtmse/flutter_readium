@@ -1,10 +1,31 @@
 import Foundation
 import ReadiumShared
 
+private func normalizedOverlayHref(_ href: String?) -> String? {
+  guard let href, !href.isEmpty else { return nil }
+  if let url = URL(string: href), let lastPathComponent = url.pathComponents.last, !lastPathComponent.isEmpty {
+    return lastPathComponent
+  }
+  let trimmed = href.split(separator: "#", maxSplits: 1).first.map(String.init) ?? href
+  return trimmed.split(separator: "/").last.map(String.init) ?? trimmed
+}
+
 struct FlutterMediaOverlay {
   let items: [FlutterMediaOverlayItem]
   
   let readingOrderDuration: TimeInterval?
+  
+  let firstChildItemsByContainerTextId: [String: FlutterMediaOverlayItem]
+
+  init(
+    items: [FlutterMediaOverlayItem],
+    readingOrderDuration: TimeInterval? = nil,
+    firstChildItemsByContainerTextId: [String: FlutterMediaOverlayItem] = [:]
+  ) {
+    self.items = items
+    self.readingOrderDuration = readingOrderDuration
+    self.firstChildItemsByContainerTextId = firstChildItemsByContainerTextId
+  }
   
   var audioFile: String? {
     items.first?.audioFile
@@ -19,7 +40,11 @@ struct FlutterMediaOverlay {
   }
 
   func itemInRangeOfTime(_ time: Double, inHref href: String) -> FlutterMediaOverlayItem? {
-    if (href != audioFile && href != textFile) {
+    let normalizedHref = normalizedOverlayHref(href)
+    let normalizedAudioFile = normalizedOverlayHref(audioFile)
+    let normalizedTextFile = normalizedOverlayHref(textFile)
+
+    if (normalizedHref != normalizedAudioFile && normalizedHref != normalizedTextFile) {
       return nil
     }
 
@@ -27,16 +52,24 @@ struct FlutterMediaOverlay {
   }
   
   func itemFromTextId(_ textId: String, inHref href: String) -> FlutterMediaOverlayItem? {
-    if (textFile != href && audioFile != href) {
+    let normalizedHref = normalizedOverlayHref(href)
+    let normalizedAudioFile = normalizedOverlayHref(audioFile)
+    let normalizedTextFile = normalizedOverlayHref(textFile)
+
+    if (normalizedHref != normalizedTextFile && normalizedHref != normalizedAudioFile) {
       return nil
     }
     
-    return items.first(where: { $0.textId == textId })
+    return items.first(where: { $0.textId == textId }) ?? firstChildItemsByContainerTextId[textId]
   }
   
   func itemFromLocator(_ locator: Locator) -> FlutterMediaOverlayItem? {
     let href = locator.href.string
-    if (textFile != href && audioFile != href) {
+    let normalizedHref = normalizedOverlayHref(href)
+    let normalizedAudioFile = normalizedOverlayHref(audioFile)
+    let normalizedTextFile = normalizedOverlayHref(textFile)
+
+    if (normalizedTextFile != normalizedHref && normalizedAudioFile != normalizedHref) {
       return nil
     }
     
@@ -62,6 +95,7 @@ struct FlutterMediaOverlay {
   static func fromJson(_ json: [String: Any], atPosition position: Int, atTocHref: String? = nil, readingOrderDuration: TimeInterval? = nil) -> FlutterMediaOverlay? {
     guard let topNarration = json["narration"] as? [[String: Any]] else { return nil }
     var acc: [FlutterMediaOverlayItem] = []
+    var firstChildItemsByContainerTextId: [String: FlutterMediaOverlayItem] = [:]
     
     for obj in topNarration {
       if let item = FlutterMediaOverlayItem.fromJson(obj, atPosition: position, atTocHref: atTocHref, readingOrderDuration: readingOrderDuration) {
@@ -70,9 +104,40 @@ struct FlutterMediaOverlay {
       // recurse if nested containers also have "narration"
       if let nested = FlutterMediaOverlay.fromJson(obj, atPosition: position, atTocHref: atTocHref, readingOrderDuration: readingOrderDuration) {
         acc.append(contentsOf: nested.items)
+        firstChildItemsByContainerTextId.merge(nested.firstChildItemsByContainerTextId) { current, _ in current }
+
+        let containerTextId = (obj["text"] as? String)?
+          .split(separator: "#", maxSplits: 1)
+          .getOrNil(1)
+          .map(String.init)
+        if let containerTextId, let firstChildItem = nested.items.first {
+          firstChildItemsByContainerTextId[containerTextId] = firstChildItem
+        }
       }
     }
-    return FlutterMediaOverlay(items: acc, readingOrderDuration: readingOrderDuration)
+    return FlutterMediaOverlay(
+      items: acc,
+      readingOrderDuration: readingOrderDuration,
+      firstChildItemsByContainerTextId: firstChildItemsByContainerTextId
+    )
+  }
+
+  func copyWith(
+    items: [FlutterMediaOverlayItem]? = nil,
+    readingOrderDuration: TimeInterval? = nil,
+    firstChildItemsByContainerTextId: [String: FlutterMediaOverlayItem]? = nil
+  ) -> FlutterMediaOverlay {
+    let updatedItems = items ?? self.items
+    let baseFallbacks = firstChildItemsByContainerTextId ?? self.firstChildItemsByContainerTextId
+    let remappedFirstChildItemsByContainerTextId = baseFallbacks.mapValues { fallbackItem in
+      updatedItems.first(where: { $0 == fallbackItem }) ?? fallbackItem
+    }
+
+    return FlutterMediaOverlay(
+      items: updatedItems,
+      readingOrderDuration: readingOrderDuration ?? self.readingOrderDuration,
+      firstChildItemsByContainerTextId: remappedFirstChildItemsByContainerTextId
+    )
   }
 }
 
@@ -140,7 +205,11 @@ struct FlutterMediaOverlayItem {
   
   /// Check if this MediaOverlayItem matched href and has time-fragment range matching a given time.
   func isAudioInRangeOfTime(_ time: Double, inHref href: String) -> Bool {
-    if (textFile != href && audioFile != href) {
+    let normalizedHref = normalizedOverlayHref(href)
+    let normalizedAudioFile = normalizedOverlayHref(audioFile)
+    let normalizedTextFile = normalizedOverlayHref(textFile)
+
+    if (normalizedTextFile != normalizedHref && normalizedAudioFile != normalizedHref) {
       return false
     }
     guard let start = audioStart else { return false }

@@ -91,8 +91,92 @@ extension Publication {
         }
         return item
       }
-      return FlutterMediaOverlay(items: items, readingOrderDuration: overlay.readingOrderDuration ?? overlay.totalDuration)
+      return overlay.copyWith(items: items, readingOrderDuration: overlay.readingOrderDuration ?? overlay.totalDuration)
     }
+  }
+
+  /// Resolves container locators (for example `<section>` or `<figure>`) to the first
+  /// readable descendant that also exists as a media-overlay item in the same document.
+  private func enrichOverlaysWithReadableDescendantTargets(_ overlays: [FlutterMediaOverlay]) async -> [FlutterMediaOverlay] {
+    var descendantIdsByHref: [String: [String: [String]]] = [:]
+
+    func descendants(for href: String) async -> [String: [String]] {
+      if let cached = descendantIdsByHref[href] {
+        return cached
+      }
+      let loaded = await getReadableDescendantIds(hrefRelativePath: href)
+      descendantIdsByHref[href] = loaded
+      return loaded
+    }
+
+    var enriched: [FlutterMediaOverlay] = []
+    enriched.reserveCapacity(overlays.count)
+
+    for overlay in overlays {
+      guard let textFile = overlay.textFile else {
+        enriched.append(overlay)
+        continue
+      }
+
+      let readableDescendants = await descendants(for: textFile)
+      if readableDescendants.isEmpty {
+        enriched.append(overlay)
+        continue
+      }
+
+      let overlayItemsByTextId = Dictionary(uniqueKeysWithValues: overlay.items.map { ($0.textId, $0) })
+      var fallbackItems = overlay.firstChildItemsByContainerTextId
+      for (containerId, descendantIds) in readableDescendants {
+        if let targetItem = descendantIds.lazy.compactMap({ overlayItemsByTextId[$0] }).first {
+          fallbackItems[containerId] = targetItem
+        }
+      }
+
+      enriched.append(overlay.copyWith(firstChildItemsByContainerTextId: fallbackItems))
+    }
+
+    return enriched
+  }
+
+  private func getReadableDescendantIds(hrefRelativePath: String) async -> [String: [String]] {
+    guard let contentLink = readingOrder.first(where: {
+      $0.href == hrefRelativePath || $0.href.substringBeforeLast("#") == hrefRelativePath
+    }) else {
+      return [:]
+    }
+
+    guard
+      let xhtml = try? await get(contentLink)?.read().asString().get(),
+      let xmlDocument = try? DefaultXMLDocumentFactory().open(
+        string: xhtml,
+        namespaces: [.xhtml, .html]
+      )
+    else {
+      return [:]
+    }
+
+    let containers = xmlDocument.all("//*[@id]")
+    var readableDescendantsByContainer: [String: [String]] = [:]
+
+    for container in containers {
+      guard let containerId = container.attribute(named: "id"), !containerId.isEmpty else {
+        continue
+      }
+
+      let readableDescendantIds = container.all(
+        ".//*[@id and normalize-space(string()) != '' and not(@role='doc-pagebreak') and not(@type='pagebreak')]"
+      )
+      .compactMap({ $0.attribute(named: "id") })
+      .filter({ $0 != containerId })
+
+      guard !readableDescendantIds.isEmpty else {
+        continue
+      }
+
+      readableDescendantsByContainer[containerId] = readableDescendantIds
+    }
+
+    return readableDescendantsByContainer
   }
 
   func getSyncNarrationMediaOverlays() async -> [FlutterMediaOverlay]? {
@@ -119,7 +203,8 @@ extension Publication {
     // Assert that we did not lose any MediaOverlays during JSON deserialization.
     assert(rawOverlays.count == narrationLinks.count)
 
-    return enrichOverlaysWithToc(rawOverlays)
+    let overlaysWithSectionLabels = await enrichOverlaysWithReadableDescendantTargets(rawOverlays)
+    return enrichOverlaysWithToc(overlaysWithSectionLabels)
   }
 
   func getGuidedNavigationMediaOverlays() async -> [FlutterMediaOverlay]? {
