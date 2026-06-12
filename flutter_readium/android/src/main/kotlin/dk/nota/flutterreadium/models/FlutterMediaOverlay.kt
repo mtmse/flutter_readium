@@ -4,7 +4,7 @@ import android.os.Parcelable
 import dk.nota.flutterreadium.PluginLog
 import dk.nota.flutterreadium.getTextId
 import dk.nota.flutterreadium.progression
-import kotlinx.parcelize.IgnoredOnParcel
+import dk.nota.flutterreadium.toSeconds
 import kotlinx.parcelize.Parcelize
 import org.json.JSONArray
 import org.json.JSONObject
@@ -23,31 +23,6 @@ private const val TAG = "FlutterMediaOverlay"
 data class FlutterMediaOverlay(
     val items: List<FlutterMediaOverlayItem>,
 ) : Parcelable {
-    /**
-     * The audio file name (without fragment).
-     */
-    private val audioFile
-        get() = items.firstOrNull()?.audioFile ?: ""
-
-    /**
-     * The text file name (without fragment).
-     */
-    @IgnoredOnParcel
-    private val textFile
-        get() = items.firstOrNull()?.textFile ?: ""
-
-    /**
-     * The audio file Url.
-     */
-    private val audioUrl
-        get() = Url.invoke(audioFile)
-
-    /**
-     * The text file Url.
-     */
-    private val textUrl
-        get() = Url.invoke(textFile)
-
     /**
      * The total duration of the audio, based on the end time of the last item.
      */
@@ -70,7 +45,7 @@ data class FlutterMediaOverlay(
     fun findItemInRange(
         fileHref: Url,
         time: Duration,
-    ): FlutterMediaOverlayItem? = findItemInRange(fileHref, time.inWholeSeconds.toDouble())
+    ): FlutterMediaOverlayItem? = findItemInRange(fileHref, time.toSeconds)
 
     /**
      * Find the media overlay item for the given file and time.
@@ -79,7 +54,7 @@ data class FlutterMediaOverlay(
     fun findItemInRange(
         fileHref: String,
         duration: Duration,
-    ): FlutterMediaOverlayItem? = findItemInRange(fileHref, duration.inWholeSeconds.toDouble())
+    ): FlutterMediaOverlayItem? = findItemInRange(fileHref, duration.toSeconds)
 
     /**
      * Find the media overlay item for the given file and time.
@@ -90,9 +65,6 @@ data class FlutterMediaOverlay(
         time: Double,
     ): FlutterMediaOverlayItem? {
         val href = Url.invoke(fileHref) ?: return null
-        if (!href.isEquivalent(textUrl) && !href.isEquivalent(audioUrl)) {
-            return null
-        }
 
         return items.firstOrNull { item -> item.isInRange(href, time) }
     }
@@ -104,11 +76,22 @@ data class FlutterMediaOverlay(
         href: Url,
         textId: String,
     ): FlutterMediaOverlayItem? {
-        if (!href.isEquivalent(textUrl) && !href.isEquivalent(audioUrl)) {
-            return null
+        return items.firstOrNull { item ->
+            item.textId == textId && href.isEquivalent(Url.invoke(item.textFile))
         }
+    }
 
-        return items.firstOrNull { item -> item.textId == textId }
+    /**
+     * Find the first media overlay item assigned to the given ToC text reference.
+     */
+    fun findItemFromTocHref(
+        href: Url,
+        textId: String,
+    ): FlutterMediaOverlayItem? {
+        return items.firstOrNull { item ->
+            val tocHref = item.tocHref ?: return@firstOrNull false
+            tocHref.fragment == textId && href.isEquivalent(tocHref.removeFragment())
+        }
     }
 
     /**
@@ -119,16 +102,15 @@ data class FlutterMediaOverlay(
     @OptIn(InternalReadiumApi::class)
     fun findItemFromLocator(locator: Locator): FlutterMediaOverlayItem? {
         val href = locator.href
-        if (!href.isEquivalent(Url.invoke(textFile)) && !href.isEquivalent(Url.invoke(audioFile))) {
-            return null
-        }
 
         locator.locations.time?.let { timeOffset ->
             return findItemInRange(href, timeOffset)
         }
 
         locator.getTextId()?.let { textId ->
-            return findItemFromTextId(href, textId)
+            val exactItem = findItemFromTextId(href, textId)
+            if (exactItem != null) return exactItem
+            return findItemFromTocHref(href, textId)
         }
 
         locator.progression?.let { progression ->
@@ -158,36 +140,80 @@ data class FlutterMediaOverlay(
     }
 
     companion object {
+        /**
+         * Creates a flat media overlay from sync narration JSON.
+         *
+         * [tocHrefs] is used while flattening to attach the closest matching structural ToC ref to
+         * each concrete media overlay item.
+         */
         fun fromJson(
             json: JSONObject,
             position: Int,
             tocHref: Url?,
             title: String,
             readiumOrderItemDuration: Double,
+            tocHrefs: List<Url> = emptyList(),
         ): FlutterMediaOverlay? {
             val topNarration = json.opt("narration") as? JSONArray ?: return null
-            val items = mutableListOf<FlutterMediaOverlayItem>()
-            for (i in 0 until topNarration.length()) {
-                val itemJson = topNarration.getJSONObject(i)
-                FlutterMediaOverlayItem
-                    .fromJson(
-                        itemJson,
+            val items =
+                topNarration.flatMapJsonObjects { itemJson ->
+                    itemJson.toItems(
                         position,
                         tocHref,
                         title,
                         readiumOrderItemDuration,
-                    )?.let { items.add(it) }
-
-                fromJson(
-                    itemJson,
-                    position,
-                    tocHref,
-                    title,
-                    readiumOrderItemDuration,
-                )?.let { items.addAll(it.items) }
-            }
+                        tocHrefs,
+                    )
+                }
 
             return FlutterMediaOverlay(items)
         }
     }
 }
+
+/**
+ * Flattens sync narration into concrete media overlay items while preserving the closest matching
+ * structural ToC reference on [FlutterMediaOverlayItem.tocHref].
+ */
+private fun JSONObject.toItems(
+    position: Int,
+    inheritedTocHref: Url?,
+    title: String,
+    readiumOrderItemDuration: Double,
+    tocHrefs: List<Url>,
+): List<FlutterMediaOverlayItem> {
+    val nodeTocHref = optString("text").matchingTocHref(tocHrefs) ?: inheritedTocHref
+    val item =
+        FlutterMediaOverlayItem.fromJson(
+            this,
+            position,
+            nodeTocHref,
+            title,
+            readiumOrderItemDuration,
+        )
+    val children =
+        (opt("narration") as? JSONArray)
+            ?.flatMapJsonObjects { childJson ->
+                childJson.toItems(
+                    position,
+                    nodeTocHref,
+                    title,
+                    readiumOrderItemDuration,
+                    tocHrefs,
+                )
+            }.orEmpty()
+
+    return listOfNotNull(item) + children
+}
+
+private fun String.matchingTocHref(tocHrefs: List<Url>): Url? {
+    val href = Url.invoke(this) ?: return null
+    return tocHrefs.firstOrNull { it.isEquivalent(href) }
+}
+
+private inline fun <T> JSONArray.flatMapJsonObjects(transform: (JSONObject) -> List<T>): List<T> =
+    buildList {
+        for (i in 0 until length()) {
+            addAll(transform(getJSONObject(i)))
+        }
+    }

@@ -222,7 +222,8 @@ private val mediaOverlayFetchConcurrency =
 /**
  * Enriches a list of [FlutterMediaOverlay] with title and [FlutterMediaOverlayItem.tocHref] from
  * the publication's table of contents. Uses a sliding-window approach: items that don't match a
- * ToC entry directly inherit the last matched entry when they share the same text file.
+ * ToC entry directly can match the structural ToC ref found while parsing sync narration, or
+ * inherit the last matched entry when they share the same text file.
  * Null overlay slots are passed through unchanged.
  */
 private fun Publication.enrichOverlaysWithToc(overlays: List<FlutterMediaOverlay?>): List<FlutterMediaOverlay?> {
@@ -230,7 +231,10 @@ private fun Publication.enrichOverlaysWithToc(overlays: List<FlutterMediaOverlay
     var lastTocMatch: Pair<String, Link>? = null
 
     fun FlutterMediaOverlayItem.enrich(): FlutterMediaOverlayItem {
-        val match = toc.find { it.first == text }
+        val match =
+            toc.find { it.first == text } ?: tocHref?.let { href ->
+                toc.find { href.isEquivalent(it.second.href.resolve()) }
+            }
         return when {
             match != null -> {
                 lastTocMatch = match
@@ -266,6 +270,7 @@ suspend fun Publication.getMediaOverlays(): List<FlutterMediaOverlay?>? {
                 .find { a -> a.mediaType == syncNarrationsMediaType }
                 ?.copy(title = r.title)
         }
+    val tocHrefs = tableOfContents.flattenChildren().map { it.href.resolve() }
 
     // Fetch+parse every overlay JSON in parallel on IO. Cap is configurable so we don't open
     // dozens of sockets to the origin at once.
@@ -300,6 +305,7 @@ suspend fun Publication.getMediaOverlays(): List<FlutterMediaOverlay?>? {
                                 null,
                                 link.title ?: "",
                                 duration,
+                                tocHrefs,
                             )
                         }
                     }
@@ -425,25 +431,48 @@ suspend fun Publication.makeSyncAudiobook(): Pair<Publication, List<FlutterMedia
             resources = resources,
             links = links,
             readingOrder =
-                mediaOverlays
-                    .mapNotNull { overlay ->
-                        val item = overlay?.items?.first() ?: return@mapNotNull null
-
-                        Href
-                            .invoke(item.audioFile)
-                            ?.let { href ->
-                                Link(
-                                    href,
-                                    mediaType = item.audioMediaType,
-                                    duration = overlay.duration,
-                                    title = item.title,
-                                )
-                            }
-                    }.filter { it.duration != null && it.duration!! > 0.0 },
+                mediaOverlays.toAudioReadingOrder(),
         )
 
     val pseudoPublication = Publication.Builder(manifest, container).build()
     return Pair(pseudoPublication, mediaOverlays)
+}
+
+/**
+ * Builds the audiobook reading order from every audio resource referenced by sync narration.
+ * Note that a single sync narration document can span multiple audio files.
+ */
+private fun List<FlutterMediaOverlay?>.toAudioReadingOrder(): List<Link> {
+    data class AudioResource(
+        val firstItem: FlutterMediaOverlayItem,
+        val duration: Double,
+    )
+
+    val audioResources = linkedMapOf<String, AudioResource>()
+    flatMap { overlay -> overlay?.items ?: emptyList() }
+        .forEach { item ->
+            val end = item.audioEnd ?: return@forEach
+            val current = audioResources[item.audioFile]
+            audioResources[item.audioFile] =
+                AudioResource(
+                    firstItem = current?.firstItem ?: item,
+                    duration = maxOf(current?.duration ?: 0.0, end),
+                )
+        }
+
+    return audioResources
+        .mapNotNull { (audioFile, resource) ->
+            Href
+                .invoke(audioFile)
+                ?.let { href ->
+                    Link(
+                        href,
+                        mediaType = resource.firstItem.audioMediaType,
+                        duration = resource.duration,
+                        title = resource.firstItem.title,
+                    )
+                }
+        }.filter { it.duration != null && it.duration!! > 0.0 }
 }
 
 /**
