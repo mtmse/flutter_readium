@@ -40,6 +40,28 @@ reader.onTimebasedPlayerStateChanged.listen((state) {
 
 When `state == TimebasedState.failure` during TTS, `state.ttsErrorType` is non-null.
 
+## onExternalPlaybackCommand
+
+Emits a `ReadiumExternalPlaybackCommand` when playback controls are received from
+system media controls, such as headphones, iOS Control Center, or the Android
+media session / notification.
+
+```dart
+reader.onExternalPlaybackCommand.listen((command) {
+  switch (command.action) {
+    case ExternalPlaybackCommandAction.play:
+      // User requested playback from system controls.
+    case ExternalPlaybackCommandAction.pause:
+      // User requested pause from system controls.
+    default:
+      break;
+  }
+});
+```
+
+This stream reports user/system control intent. Use
+`onTimebasedPlayerStateChanged` for the resulting playback state and progress.
+
 ## onReaderStatusChanged
 
 Emits `ReadiumReaderStatus` for reader lifecycle events.

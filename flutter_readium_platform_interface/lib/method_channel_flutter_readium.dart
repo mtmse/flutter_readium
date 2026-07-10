@@ -32,11 +32,15 @@ class MethodChannelFlutterReadium extends FlutterReadiumPlatform {
   @visibleForTesting
   EventChannel narrationSyncChannel = const EventChannel('dk.nota.flutter_readium/narration-sync');
 
+  @visibleForTesting
+  EventChannel externalPlaybackCommandChannel = const EventChannel('dk.nota.flutter_readium/external-playback-command');
+
   Stream<Locator>? _onTextLocatorChanged;
   Stream<ReadiumTimebasedState>? _onTimebasedPlayerStateChanged;
   Stream<ReadiumReaderStatus>? _onReaderStatusChanged;
   Stream<ReadiumError>? _onErrorEvent;
   Stream<bool>? _onNarrationSyncChanged;
+  Stream<ReadiumExternalPlaybackCommand>? _onExternalPlaybackCommand;
 
   /// Fires whenever the Reader's current Locator changes.
   ///
@@ -118,6 +122,15 @@ class MethodChannelFlutterReadium extends FlutterReadiumPlatform {
   }
 
   @override
+  Stream<ReadiumExternalPlaybackCommand> get onExternalPlaybackCommand {
+    _onExternalPlaybackCommand ??= externalPlaybackCommandChannel.receiveBroadcastStream().map((dynamic event) {
+      final jsonMap = json.decode(event as String) as Map<String, dynamic>;
+      return ReadiumExternalPlaybackCommand.fromJson(jsonMap);
+    }).asBroadcastStream();
+    return _onExternalPlaybackCommand!;
+  }
+
+  @override
   Future<Publication> loadPublication(String pubUrl) async {
     final publicationString = await methodChannel
         .invokeMethod<String>('loadPublication', [pubUrl])
@@ -161,6 +174,7 @@ class MethodChannelFlutterReadium extends FlutterReadiumPlatform {
     _onTextLocatorChanged = null;
     _onReaderStatusChanged = null;
     _onNarrationSyncChanged = null;
+    _onExternalPlaybackCommand = null;
   }
 
   @override

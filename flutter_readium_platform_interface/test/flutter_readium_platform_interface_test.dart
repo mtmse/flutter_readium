@@ -17,6 +17,9 @@ void main() {
       locations: Locations(cssSelector: '#loc1'),
       text: LocatorText(before: 'a', highlight: 'b', after: 'c'),
     );
+    const testExternalPlaybackCommand = ReadiumExternalPlaybackCommand(
+      action: ExternalPlaybackCommandAction.pause,
+    );
 
     setUp(() async {
       methodChannelReadium = MethodChannelFlutterReadium();
@@ -61,6 +64,27 @@ void main() {
           return null;
         },
       );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        MethodChannel(methodChannelReadium.externalPlaybackCommandChannel.name),
+        (methodCall) async {
+          switch (methodCall.method) {
+            case 'listen':
+              await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.handlePlatformMessage(
+                methodChannelReadium.externalPlaybackCommandChannel.name,
+                methodChannelReadium.externalPlaybackCommandChannel.codec.encodeSuccessEnvelope(
+                  jsonEncode(testExternalPlaybackCommand.toJson()),
+                ),
+                (_) {},
+              );
+              break;
+            case 'cancel':
+            default:
+              return null;
+          }
+          return null;
+        },
+      );
     });
 
     test(
@@ -68,6 +92,14 @@ void main() {
       () async {
         final result = await methodChannelReadium.onTextLocatorChanged.first;
         expect(result, testTextLocator);
+      },
+    );
+
+    test(
+      'onExternalPlaybackCommand emits the command sent from the platform',
+      () async {
+        final result = await methodChannelReadium.onExternalPlaybackCommand.first;
+        expect(result.action, testExternalPlaybackCommand.action);
       },
     );
 

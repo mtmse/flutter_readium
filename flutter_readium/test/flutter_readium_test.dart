@@ -20,6 +20,7 @@ class MockFlutterReadiumPlatform with MockPlatformInterfaceMixin implements Flut
   final _textLocatorController = StreamController<Locator>.broadcast();
   final _statusController = StreamController<ReadiumReaderStatus>.broadcast();
   final _timebasedController = StreamController<ReadiumTimebasedState>.broadcast();
+  final _externalPlaybackCommandController = StreamController<ReadiumExternalPlaybackCommand>.broadcast();
   final _errorController = StreamController<ReadiumError>.broadcast();
   final _narrationSyncController = StreamController<bool>.broadcast();
 
@@ -42,6 +43,9 @@ class MockFlutterReadiumPlatform with MockPlatformInterfaceMixin implements Flut
 
   @override
   Stream<ReadiumTimebasedState> get onTimebasedPlayerStateChanged => _timebasedController.stream;
+
+  @override
+  Stream<ReadiumExternalPlaybackCommand> get onExternalPlaybackCommand => _externalPlaybackCommandController.stream;
 
   @override
   Stream<ReadiumError> get onErrorEvent => _errorController.stream;

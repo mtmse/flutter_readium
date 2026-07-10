@@ -55,6 +55,8 @@ class FlutterReadiumWebPlugin extends FlutterReadiumPlatform {
       StreamController<ReadiumReaderStatus>.broadcast();
   static final StreamController<ReadiumError> _errorEventController = StreamController<ReadiumError>.broadcast();
   static final StreamController<bool> _narrationSyncController = StreamController<bool>.broadcast();
+  static final StreamController<ReadiumExternalPlaybackCommand> _externalPlaybackCommandController =
+      StreamController<ReadiumExternalPlaybackCommand>.broadcast();
 
   static void addTextLocatorUpdate(Locator locator) {
     _locatorTextController.add(locator);
@@ -84,6 +86,9 @@ class FlutterReadiumWebPlugin extends FlutterReadiumPlatform {
 
   @override
   Stream<ReadiumTimebasedState> get onTimebasedPlayerStateChanged => _timebasedStateController.stream;
+
+  @override
+  Stream<ReadiumExternalPlaybackCommand> get onExternalPlaybackCommand => _externalPlaybackCommandController.stream;
 
   @override
   Stream<ReadiumReaderStatus> get onReaderStatusChanged => _readerStatusController.stream;
