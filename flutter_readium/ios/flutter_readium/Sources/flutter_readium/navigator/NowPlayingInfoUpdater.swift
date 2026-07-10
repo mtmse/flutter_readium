@@ -191,19 +191,33 @@ public class NowPlayingInfoUpdater {
       }
     }
 
+    func emit(_ action: ExternalPlaybackCommandAction, position: TimeInterval? = nil) {
+      FlutterReadiumPlugin.instance?.emitExternalPlaybackCommand(
+        ReadiumExternalPlaybackCommand(
+          action: action,
+          position: position
+        )
+      )
+    }
+
     on(rcc.playCommand) { navigator, _ in
+      emit(.play)
       Task { @MainActor in
         await navigator.resume()
       }
     }
 
     on(rcc.pauseCommand) { navigator, _ in
+      emit(.pause)
       Task { @MainActor in
         await navigator.pause()
       }
     }
 
     on(rcc.togglePlayPauseCommand) { navigator, _ in
+      let action: ExternalPlaybackCommandAction =
+        FlutterReadiumPlugin.instance?.lastTimebasedPlayerState?.state == .playing ? .pause : .play
+      emit(action)
       Task { @MainActor in
         await navigator.togglePlayPause()
       }
@@ -211,6 +225,7 @@ public class NowPlayingInfoUpdater {
 
     if (skipTrackEnabled) {
       on(rcc.previousTrackCommand) { navigator, _ in
+        emit(.previous)
         Task { @MainActor in
           // TODO: Should these actually skip a full track?
           await navigator.seekBackward()
@@ -218,6 +233,7 @@ public class NowPlayingInfoUpdater {
       }
 
       on(rcc.nextTrackCommand) { navigator, _ in
+        emit(.next)
         Task { @MainActor in
           // TODO: Should these actually skip a full track?
           await navigator.seekForward()
@@ -230,12 +246,14 @@ public class NowPlayingInfoUpdater {
 
     if (!preferredIntervals.isEmpty) {
       on(rcc.skipBackwardCommand) { navigator, _ in
+        emit(.seekBackward)
         Task {
           await navigator.seekBackward()
         }
       }
 
       on(rcc.skipForwardCommand) { navigator, _ in
+        emit(.seekForward)
         Task {
           await navigator.seekForward()
         }
@@ -247,6 +265,7 @@ public class NowPlayingInfoUpdater {
         guard let event = event as? MPChangePlaybackPositionCommandEvent else {
           return
         }
+        emit(.seekTo, position: event.positionTime)
         Task {
           if self.timebase == .wholeBook,
              let audioNavigator = navigator as? FlutterAudioNavigator {
