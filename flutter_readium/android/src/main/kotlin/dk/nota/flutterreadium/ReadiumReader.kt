@@ -12,6 +12,8 @@ import androidx.savedstate.SavedStateRegistryOwner
 import dk.nota.flutterreadium.events.NarrationSyncEventChannel
 import dk.nota.flutterreadium.events.ReadiumError
 import dk.nota.flutterreadium.events.ReadiumErrorEventChannel
+import dk.nota.flutterreadium.events.ReadiumExternalPlaybackCommand
+import dk.nota.flutterreadium.events.ReadiumExternalPlaybackCommandEventChannel
 import dk.nota.flutterreadium.events.ReadiumReaderStatus
 import dk.nota.flutterreadium.events.ReadiumReaderStatusEventChannel
 import dk.nota.flutterreadium.events.TextLocatorEventChannel
@@ -135,6 +137,8 @@ object ReadiumReader :
     private var readiumReaderStatusEventChannel: ReadiumReaderStatusEventChannel? = null
 
     private var errorChannel: ReadiumErrorEventChannel? = null
+
+    private var externalPlaybackCommandEventChannel: ReadiumExternalPlaybackCommandEventChannel? = null
 
     private var narrationSyncEventChannel: NarrationSyncEventChannel? = null
 
@@ -294,6 +298,9 @@ object ReadiumReader :
 
         errorChannel?.dispose()
         errorChannel = ReadiumErrorEventChannel(messenger)
+
+        externalPlaybackCommandEventChannel?.dispose()
+        externalPlaybackCommandEventChannel = ReadiumExternalPlaybackCommandEventChannel(messenger)
 
         narrationSyncEventChannel?.dispose()
         narrationSyncEventChannel = NarrationSyncEventChannel(messenger)
@@ -484,6 +491,9 @@ object ReadiumReader :
 
         errorChannel?.dispose()
         errorChannel = null
+
+        externalPlaybackCommandEventChannel?.dispose()
+        externalPlaybackCommandEventChannel = null
 
         narrationSyncEventChannel?.dispose()
         narrationSyncEventChannel = null
@@ -1768,6 +1778,13 @@ object ReadiumReader :
      */
     fun emitError(error: ReadiumError) {
         errorChannel?.sendEvent(error)
+    }
+
+    /**
+     * Emit an external playback command received from system media controls.
+     */
+    fun emitExternalPlaybackCommand(command: ReadiumExternalPlaybackCommand) {
+        externalPlaybackCommandEventChannel?.sendEvent(command)
     }
 
     /**
