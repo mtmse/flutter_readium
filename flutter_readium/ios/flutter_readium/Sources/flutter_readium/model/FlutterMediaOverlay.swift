@@ -186,9 +186,14 @@ struct FlutterMediaOverlayItem {
   
   let tocTitle: String?
   let tocHref: String?
+
+  /// Label of the latest physical page break at or before this item, e.g. "42" or "iv".
+  /// Nil when no page break precedes the item or the publication has no pageList.
+  let physicalPage: String?
   
-  init(audio: String, text: String, position: Int, tocTitle: String? = nil, tocHref: String? = nil, readingOrderDuration: TimeInterval? = nil) {
+  init(audio: String, text: String, position: Int, tocTitle: String? = nil, tocHref: String? = nil, readingOrderDuration: TimeInterval? = nil, physicalPage: String? = nil) {
     self.audio = audio
+    self.physicalPage = physicalPage
     self.text = text
     self.position = position
     self.tocTitle = tocTitle
@@ -215,7 +220,11 @@ struct FlutterMediaOverlayItem {
   }
   
   func copyWith(tocTitle: String?, tocHref: String?) -> FlutterMediaOverlayItem {
-    return FlutterMediaOverlayItem(audio: audio, text: text, position: position, tocTitle: tocTitle, tocHref: tocHref, readingOrderDuration: readingOrderDuration)
+    return FlutterMediaOverlayItem(audio: audio, text: text, position: position, tocTitle: tocTitle, tocHref: tocHref, readingOrderDuration: readingOrderDuration, physicalPage: physicalPage)
+  }
+
+  func copyWith(physicalPage: String?) -> FlutterMediaOverlayItem {
+    return FlutterMediaOverlayItem(audio: audio, text: text, position: position, tocTitle: tocTitle, tocHref: tocHref, readingOrderDuration: readingOrderDuration, physicalPage: physicalPage)
   }
   
   static func == (lhs: FlutterMediaOverlayItem, rhs: FlutterMediaOverlayItem) -> Bool {
@@ -256,6 +265,9 @@ struct FlutterMediaOverlayItem {
     }
     if (tocHref != nil) {
       locator.locations.otherLocations["tocHref"] = .string(tocHref!)
+    }
+    if let physicalPage, !physicalPage.isEmpty {
+      locator.locations.otherLocations["physicalPage"] = .string(physicalPage)
     }
     return locator
   }
@@ -302,5 +314,37 @@ struct FlutterMediaOverlayItem {
       let text  = json["text"]  as? String, !text.isEmpty
     else { return nil }
     return FlutterMediaOverlayItem(audio: audio, text: text, position: position, tocHref: atTocHref, readingOrderDuration: readingOrderDuration)
+  }
+}
+
+extension Array where Element == FlutterMediaOverlay {
+  /// Sets `physicalPage` on every item to the label of the latest page break in `pageList`
+  /// at or before it. Items are visited in narration order, so the page carries over between
+  /// resources. Returns the overlays unchanged when `pageList` has no usable page breaks.
+  func withPhysicalPages(_ pageList: [Link]) -> [FlutterMediaOverlay] {
+    var pagesById: [String: [(file: String, title: String)]] = [:]
+    for link in pageList {
+      let parts = link.href.split(separator: "#", maxSplits: 1).map(String.init)
+      guard parts.count == 2, !parts[1].isEmpty,
+            let title = link.title, !title.isEmpty else { continue }
+      pagesById[parts[1], default: []].append((file: Self.normalizedPath(parts[0]), title: title))
+    }
+    if pagesById.isEmpty { return self }
+
+    var currentPage: String?
+    return map { overlay in
+      let items = overlay.items.map { item -> FlutterMediaOverlayItem in
+        let textFile = Self.normalizedPath(item.textFile)
+        if let page = pagesById[item.textId]?.first(where: { $0.file == textFile }) {
+          currentPage = page.title
+        }
+        return item.copyWith(physicalPage: currentPage)
+      }
+      return FlutterMediaOverlay(items: items, readingOrderDuration: overlay.readingOrderDuration, narrationContainerTocHrefs: overlay.narrationContainerTocHrefs)
+    }
+  }
+
+  private static func normalizedPath(_ path: String) -> String {
+    path.hasPrefix("/") ? String(path.dropFirst()) : path
   }
 }

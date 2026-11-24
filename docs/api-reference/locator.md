@@ -88,4 +88,4 @@ before it is sent over the bridge:
 | `tocHref` | `string` | Current Table of Contents position in `href#identifier` format |
 | `currentPage` | `int` | Current dynamic page-number of the rendered resource (starts from 1) |
 | `totalPages` | `int` | Total number of dynamic pages of the rendered resource |
-| `physicalPage` | `string` | Identifier for the most-recently passed physical page reference |
+| `physicalPage` | `string` | Identifier for the most-recently passed physical page reference. Also set on synchronized narration audio locators (Android, iOS), from the publication's `pageList`. Read it with `locations.physicalPage` |

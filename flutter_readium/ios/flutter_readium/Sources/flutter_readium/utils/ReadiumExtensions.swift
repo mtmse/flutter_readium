@@ -149,10 +149,10 @@ extension Publication {
 
   func getSyncNarrationMediaOverlays() async -> [FlutterMediaOverlay]? {
     if (containsGuidedNavigationMediaOverlays) {
-      return await getGuidedNavigationMediaOverlays()
+      return await getGuidedNavigationMediaOverlays()?.withPhysicalPages(pageList)
     }
     else if (containsSyncNarration) {
-      return await getMediaOverlays()
+      return await getMediaOverlays()?.withPhysicalPages(pageList)
     }
     return nil
   }

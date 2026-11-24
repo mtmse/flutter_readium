@@ -28,6 +28,7 @@ import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Manifest
 import org.readium.r2.shared.publication.Publication
+import org.readium.r2.shared.publication.epub.pageList
 import org.readium.r2.shared.publication.html.cssSelector
 import org.readium.r2.shared.publication.services.content.Content
 import org.readium.r2.shared.publication.services.content.content
@@ -571,6 +572,7 @@ suspend fun Publication.makeSyncAudiobook(): Pair<Publication, List<FlutterMedia
             getMediaOverlays()
         }
     if (mediaOverlays == null) return Pair(this, null)
+    val mediaOverlaysWithPages = mediaOverlays.withPhysicalPages(pageList)
 
     val manifest =
         Manifest(
@@ -578,11 +580,42 @@ suspend fun Publication.makeSyncAudiobook(): Pair<Publication, List<FlutterMedia
             metadata = metadata.copy(conformsTo = setOf(Publication.Profile.AUDIOBOOK)),
             resources = resources,
             links = links,
-            readingOrder = mediaOverlays.toAudioReadingOrder(),
+            readingOrder = mediaOverlaysWithPages.toAudioReadingOrder(),
         )
 
     val pseudoPublication = Publication.Builder(manifest, container).build()
-    return Pair(pseudoPublication, mediaOverlays)
+    return Pair(pseudoPublication, mediaOverlaysWithPages)
+}
+
+/**
+ * Sets [FlutterMediaOverlayItem.physicalPage] on every item to the label of the latest page
+ * break in [pageList] at or before it. Items are visited in narration order, so the page
+ * carries over between resources. Returns the overlays unchanged when [pageList] is empty.
+ */
+fun List<FlutterMediaOverlay?>.withPhysicalPages(pageList: List<Link>): List<FlutterMediaOverlay?> {
+    val pagesById =
+        pageList
+            .mapNotNull { link ->
+                val url = link.href.resolve()
+                val id = url.fragment?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val title = link.title?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                Triple(id, url.removeFragment(), title)
+            }.groupBy({ it.first }, { it.second to it.third })
+    if (pagesById.isEmpty()) return this
+
+    var currentPage: String? = null
+    return map { overlay ->
+        overlay?.copy(
+            items =
+                overlay.items.map { item ->
+                    val textFile = Url.invoke(item.textFile)
+                    pagesById[item.textId]
+                        ?.firstOrNull { (file, _) -> textFile != null && file.isEquivalent(textFile) }
+                        ?.let { (_, title) -> currentPage = title }
+                    item.copy(physicalPage = currentPage)
+                },
+        )
+    }
 }
 
 /**
@@ -824,6 +857,17 @@ fun Locator.copyWithTocHref(tocUrl: Url?): Locator {
     if (tocUrl == null) return copy()
 
     return this.copyWithAdditionalLocations(mapOf(tocHrefLocationKey to tocUrl.toString()))
+}
+
+private const val physicalPageLocationKey = "physicalPage"
+
+/**
+ * Add a physicalPage label to Locator.locations.otherLocations.
+ */
+fun Locator.copyWithPhysicalPage(physicalPage: String?): Locator {
+    if (physicalPage.isNullOrEmpty()) return this
+
+    return this.copyWithAdditionalLocations(mapOf(physicalPageLocationKey to physicalPage))
 }
 
 /**

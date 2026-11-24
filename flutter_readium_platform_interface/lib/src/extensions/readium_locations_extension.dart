@@ -48,7 +48,13 @@ extension LocationExtension on Locations {
     return copyWith(fragments: newFragments);
   }
 
-  String? get physicalPage => fragments.firstWhereOrNull((final f) => f.startsWith('physicalPage='))?.split('=').last;
+  /// Label of the latest physical page break, e.g. "42" or "iv".
+  ///
+  /// Native readers send it as the `physicalPage` location. A `physicalPage=` fragment, as
+  /// written by [copyWithPhysicalPageNumber], is used as fallback.
+  String? get physicalPage =>
+      this['physicalPage'] as String? ??
+      fragments.firstWhereOrNull((final f) => f.startsWith('physicalPage='))?.split('=').last;
 
   int? get page => int.tryParse(
     fragments.firstWhereOrNull((final f) => f.startsWith('page='))?.split('=').last ?? '',

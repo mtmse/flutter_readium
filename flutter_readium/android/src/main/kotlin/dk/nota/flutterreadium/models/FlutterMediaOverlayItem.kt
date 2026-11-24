@@ -1,6 +1,7 @@
 package dk.nota.flutterreadium.models
 
 import android.os.Parcelable
+import dk.nota.flutterreadium.copyWithPhysicalPage
 import dk.nota.flutterreadium.copyWithTimeFragment
 import dk.nota.flutterreadium.copyWithTocHref
 import dk.nota.flutterreadium.letIfBothNotNull
@@ -41,6 +42,11 @@ data class FlutterMediaOverlayItem(
      * value and to calculate an updated time fragment.
      */
     val readingOrderItemDuration: Double,
+    /**
+     * Label of the latest physical page break at or before this item, e.g. "42" or "iv".
+     * Null when no page break precedes the item or the publication has no pageList.
+     */
+    val physicalPage: String? = null,
 ) : Parcelable {
     /**
      * The audio file without the fragment (e.g. "chapter1.mp3")
@@ -195,7 +201,10 @@ data class FlutterMediaOverlayItem(
      */
     @IgnoredOnParcel
     val flutterAudioLocator: Locator? by lazy {
-        syncTextLocator?.copyWithTimeFragment(audioStart ?: 0.0)?.copyWithTocHref(tocHref)
+        syncTextLocator
+            ?.copyWithTimeFragment(audioStart ?: 0.0)
+            ?.copyWithTocHref(tocHref)
+            ?.copyWithPhysicalPage(physicalPage)
     }
 
     /**
