@@ -258,9 +258,7 @@ internal class PublicationMethodCallHandler : MethodChannel.MethodCallHandler {
                     )
                 }
 
-                ReadiumReader.goToLocator(locator)
-
-                return Try.success(true)
+                return Try.success(ReadiumReader.goToLocator(locator))
             }
 
             "audioEnable" -> {

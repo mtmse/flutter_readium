@@ -1530,13 +1530,14 @@ object ReadiumReader :
     }
 
     /**
-     * Go to a specific locator.
+     * Go to a specific locator. Returns false when the reader could not navigate, for example
+     * when synchronized narration has no audio for the target text anchor.
      */
-    suspend fun goToLocator(locator: Locator) {
+    suspend fun goToLocator(locator: Locator): Boolean {
         val publication =
             currentPublication ?: run {
                 PluginLog.e(TAG, "::goToLocator called without a current publication")
-                return
+                return false
             }
         val toLocator = publication.normalizeLocator(locator)
         timebasedNavigator?.let { navigator ->
@@ -1547,7 +1548,7 @@ object ReadiumReader :
                 )
             // An unmapped anchor must not replace the locator used by play(null).
             if (navigator is SyncAudiobookNavigator) {
-                if (!navigator.seekToLocator(narrationLocator)) return
+                if (!navigator.seekToLocator(narrationLocator)) return false
             } else {
                 navigator.goToLocator(narrationLocator)
             }
@@ -1557,14 +1558,14 @@ object ReadiumReader :
             currentReadiumTimebasedState.value =
                 currentReadiumTimebasedState.value.copyWith(currentLocator = narrationLocator)
 
-            return
+            return true
         }
 
         // An explicit locator jump (TOC / bookmark / search) during active narration is
         // handled by the timebasedNavigator.goToLocator branch above (narration follows the
         // jump). This branch is only reached when narration is NOT active, so a jump must not
         // enter manual mode. Accepted page-turns (EpubNavigator.goForward/goBackward and native input) do enter manual mode.
-        epubGoToLocator(toLocator, true)
+        return epubGoToLocator(toLocator, true)
     }
 
     /**
@@ -1806,15 +1807,16 @@ object ReadiumReader :
 
     /**
      * Go to a specific locator in the EPUB navigator, this scrolls to the locator position if needed.
+     * Returns false when there is no open publication or visual navigator.
      */
     suspend fun epubGoToLocator(
         locator: Locator,
         animated: Boolean,
-    ) {
+    ): Boolean {
         val publication =
             currentPublication ?: run {
                 PluginLog.e(TAG, "::epubGoToLocator called without an open publication")
-                return
+                return false
             }
 
         val toLocator = publication.normalizeLocator(locator)
@@ -1822,10 +1824,11 @@ object ReadiumReader :
         val navigator =
             awaitVisualNavigator(publication) ?: run {
                 PluginLog.d(TAG, "::epubGoToLocator called without a visualNavigator")
-                return
+                return false
             }
 
         navigator.goToLocator(toLocator, animated)
+        return true
     }
 
     suspend fun epubGoToProgression(progression: Double) {
